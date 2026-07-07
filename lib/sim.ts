@@ -1,22 +1,32 @@
-// Simulation engine: differential-drive robot, pixel-sampled sensors,
-// ball physics, scoring. Pure logic; rendering lives elsewhere.
+// Simulation engine: differential-drive robot with motor inertia,
+// pixel-sampled sensors with optional noise, tile mechanics
+// (checkpoints, seesaw, ramps, bumps, red end line), scoring with
+// checkpoint-based lack of progress, and an 8-minute run clock.
 
-import { Ball, Course, TILE, tileAt } from "./course";
+import { Ball, Course, TILE, Tile, tileAt } from "./course";
 import { classify } from "./render";
 
 export const ROBOT_R = 34; // robot radius (px)
 export const MAX_SPEED = 260; // px/s at motor=1
 const TURN_FACTOR = 3.4; // rad/s at full differential
+const MOTOR_TAU = 0.12; // s, motor response time constant
 const PICKUP_DIST = ROBOT_R + 16;
 const CAMERA_FOV = Math.PI * 0.5;
 const CAMERA_RANGE = TILE * 2.2;
+export const RUN_SECONDS = 8 * 60;
+
+export interface SimOptions {
+  noise: boolean; // sensor + motor noise
+}
 
 export interface RobotState {
   x: number;
   y: number;
   heading: number; // radians, 0 = +x
-  ml: number; // motor left [-1, 1]
+  ml: number; // commanded motor left [-1, 1]
   mr: number;
+  vl: number; // actual motor output after inertia
+  vr: number;
   gripperClosed: boolean;
   heldBall: Ball | null;
 }
@@ -31,6 +41,10 @@ export interface Score {
   gaps: number;
   obstacles: number;
   intersections: number;
+  bumps: number;
+  seesaws: number;
+  ramps: number;
+  checkpoints: number;
   victimsAlive: number;
   victimsDead: number;
   lops: number;
@@ -42,25 +56,42 @@ export interface SimEvent {
   msg: string;
 }
 
+const zeroScore = (): Score => ({
+  gaps: 0, obstacles: 0, intersections: 0, bumps: 0, seesaws: 0, ramps: 0,
+  checkpoints: 0, victimsAlive: 0, victimsDead: 0, lops: 0, total: 0,
+});
+
+function gauss(sigma: number): number {
+  // Box-Muller
+  const u = 1 - Math.random();
+  const v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v) * sigma;
+}
+
 export class Sim {
   course: Course;
   robot: RobotState;
   balls: Ball[];
   time = 0;
-  scoredTiles = new Set<number>();
-  score: Score = { gaps: 0, obstacles: 0, intersections: 0, victimsAlive: 0, victimsDead: 0, lops: 0, total: 0 };
+  score: Score = zeroScore();
   events: SimEvent[] = [];
   offLineSince = 0;
-  finished = false;
+  finished: false | "time" | "red" = false;
+  opts: SimOptions;
+  private scoredTiles = new Set<number>();
+  private respawn: { x: number; y: number; heading: number };
+  private seesawWobble = 0;
   private world: CanvasRenderingContext2D;
   private img: ImageData;
 
-  constructor(course: Course, world: CanvasRenderingContext2D) {
+  constructor(course: Course, world: CanvasRenderingContext2D, opts: SimOptions = { noise: true }) {
     this.course = course;
     this.world = world;
+    this.opts = opts;
     this.img = world.getImageData(0, 0, course.cols * TILE, course.rows * TILE);
     this.balls = course.balls.map((b) => ({ ...b }));
     this.robot = this.spawn();
+    this.respawn = { x: this.robot.x, y: this.robot.y, heading: this.robot.heading };
   }
 
   private spawn(): RobotState {
@@ -68,25 +99,20 @@ export class Sim {
       for (let c = 0; c < this.course.cols; c++) {
         const t = tileAt(this.course, c, r);
         if (t.kind === "start") {
-          const heading = (t.rot * Math.PI) / 2;
-          return {
-            x: c * TILE + TILE / 2,
-            y: r * TILE + TILE / 2,
-            heading,
-            ml: 0,
-            mr: 0,
-            gripperClosed: false,
-            heldBall: null,
-          };
+          return this.freshRobot(c * TILE + TILE / 2, r * TILE + TILE / 2, (t.rot * Math.PI) / 2);
         }
       }
     }
-    return { x: TILE / 2, y: TILE / 2, heading: 0, ml: 0, mr: 0, gripperClosed: false, heldBall: null };
+    return this.freshRobot(TILE / 2, TILE / 2, 0);
+  }
+
+  private freshRobot(x: number, y: number, heading: number): RobotState {
+    return { x, y, heading, ml: 0, mr: 0, vl: 0, vr: 0, gripperClosed: false, heldBall: null };
   }
 
   // ---------- pixel sampling ----------
 
-  sample(x: number, y: number): "white" | "black" | "green" | "silver" | "wall" {
+  sample(x: number, y: number): ReturnType<typeof classify> {
     const w = this.course.cols * TILE;
     const h = this.course.rows * TILE;
     const xi = Math.round(x);
@@ -99,7 +125,6 @@ export class Sim {
   // ---------- sensors ----------
 
   lineSensors(n = 8): number[] {
-    // a bar of n sensors mounted ahead of the wheel axle
     const out: number[] = [];
     const span = ROBOT_R * 1.7;
     const ahead = ROBOT_R * 0.75;
@@ -109,7 +134,9 @@ export class Sim {
       const sx = x + Math.cos(heading) * ahead - Math.sin(heading) * off;
       const sy = y + Math.sin(heading) * ahead + Math.cos(heading) * off;
       const c = this.sample(sx, sy);
-      out.push(c === "black" ? 1 : c === "green" ? 0.55 : 0);
+      let v = c === "black" ? 1 : c === "green" ? 0.55 : c === "red" ? 0.8 : 0;
+      if (this.opts.noise) v = Math.min(1, Math.max(0, v + gauss(0.03)));
+      out.push(v);
     }
     return out;
   }
@@ -127,12 +154,14 @@ export class Sim {
   }
 
   distance(angleOffset = 0): number {
-    // raycast against walls/obstacles, in px
     const { x, y, heading } = this.robot;
     const a = heading + angleOffset;
     for (let d = ROBOT_R; d < TILE * 3; d += 3) {
       const c = this.sample(x + Math.cos(a) * d, y + Math.sin(a) * d);
-      if (c === "wall") return d - ROBOT_R;
+      if (c === "wall") {
+        const val = d - ROBOT_R;
+        return this.opts.noise ? Math.max(0, val + gauss(1.5)) : val;
+      }
     }
     return TILE * 3;
   }
@@ -150,17 +179,20 @@ export class Sim {
       while (ang > Math.PI) ang -= 2 * Math.PI;
       while (ang < -Math.PI) ang += 2 * Math.PI;
       if (Math.abs(ang) > CAMERA_FOV / 2) continue;
-      out.push({ kind: b.kind, angle: ang, distance: dist });
+      out.push({
+        kind: b.kind,
+        angle: this.opts.noise ? ang + gauss(0.015) : ang,
+        distance: this.opts.noise ? dist + gauss(2) : dist,
+      });
     }
     return out.sort((a, b) => a.distance - b.distance);
   }
 
   inZone(): boolean {
-    const t = this.tileUnder();
-    return t?.kind === "zone";
+    return this.tileUnder()?.kind === "zone";
   }
 
-  private tileUnder() {
+  tileUnder(): Tile | null {
     const c = Math.floor(this.robot.x / TILE);
     const r = Math.floor(this.robot.y / TILE);
     if (c < 0 || r < 0 || c >= this.course.cols || r >= this.course.rows) return null;
@@ -177,7 +209,6 @@ export class Sim {
   setGripper(closed: boolean) {
     const rb = this.robot;
     if (closed && !rb.gripperClosed && !rb.heldBall) {
-      // try to grab the nearest ball in front
       const noseX = rb.x + Math.cos(rb.heading) * ROBOT_R;
       const noseY = rb.y + Math.sin(rb.heading) * ROBOT_R;
       let best: Ball | null = null;
@@ -208,7 +239,6 @@ export class Sim {
   }
 
   private checkRescue(b: Ball) {
-    // evacuation corner lives on the zone tile with rot=2, bottom-right triangle
     for (let r = 0; r < this.course.rows; r++) {
       for (let c = 0; c < this.course.cols; c++) {
         const t = tileAt(this.course, c, r);
@@ -233,14 +263,50 @@ export class Sim {
   step(dt: number) {
     if (this.finished) return;
     this.time += dt;
+    if (this.time >= RUN_SECONDS) {
+      this.finished = "time";
+      this.log("time up");
+      return;
+    }
+
     const rb = this.robot;
-    const v = ((rb.ml + rb.mr) / 2) * MAX_SPEED;
-    const w = ((rb.mr - rb.ml) / 2) * TURN_FACTOR;
+
+    // motor inertia: actual output chases the command
+    const k = 1 - Math.exp(-dt / MOTOR_TAU);
+    let ml = rb.ml;
+    let mr = rb.mr;
+    if (this.opts.noise) {
+      ml *= 1 + gauss(0.02);
+      mr *= 1 + gauss(0.02);
+    }
+    rb.vl += (ml - rb.vl) * k;
+    rb.vr += (mr - rb.vr) * k;
+
+    // tile mechanics modify effective speed
+    const tile = this.tileUnder();
+    let speedFactor = 1;
+    if (tile) {
+      const alongRamp = Math.abs(Math.cos(rb.heading - (tile.rot * Math.PI) / 2));
+      if (tile.kind === "rampup") speedFactor = 1 - 0.35 * alongRamp;
+      if (tile.kind === "rampdown") speedFactor = 1 + 0.2 * alongRamp;
+      if (tile.kind === "bump") {
+        speedFactor = 0.72;
+        if (this.opts.noise) rb.heading += gauss(0.012);
+      }
+      if (tile.kind === "seesaw") {
+        this.seesawWobble = Math.min(this.seesawWobble + dt, 0.35);
+        rb.heading += Math.sin(this.time * 18) * 0.004 * (this.seesawWobble / 0.35);
+      } else {
+        this.seesawWobble = 0;
+      }
+    }
+
+    const v = ((rb.vl + rb.vr) / 2) * MAX_SPEED * speedFactor;
+    const w = ((rb.vr - rb.vl) / 2) * TURN_FACTOR;
     rb.heading += w * dt;
     const nx = rb.x + Math.cos(rb.heading) * v * dt;
     const ny = rb.y + Math.sin(rb.heading) * v * dt;
 
-    // collision: check the nose pixel
     const noseX = nx + Math.cos(rb.heading) * ROBOT_R * Math.sign(v || 1);
     const noseY = ny + Math.sin(rb.heading) * ROBOT_R * Math.sign(v || 1);
     if (this.sample(noseX, noseY) !== "wall") {
@@ -248,7 +314,6 @@ export class Sim {
       rb.y = ny;
     }
 
-    // held ball follows
     if (rb.heldBall) {
       rb.heldBall.x = rb.x + Math.cos(rb.heading) * (ROBOT_R + 6);
       rb.heldBall.y = rb.y + Math.sin(rb.heading) * (ROBOT_R + 6);
@@ -265,22 +330,35 @@ export class Sim {
     if (!t) return;
 
     if (!this.scoredTiles.has(idx)) {
-      if (t.kind === "gap") {
+      const give = (points: number, key: keyof Score, msg: string) => {
         this.scoredTiles.add(idx);
-        this.score.gaps++;
-        this.addPoints(10, "gap passed");
-      } else if (t.kind === "obstacle") {
+        (this.score[key] as number)++;
+        this.addPoints(points, msg);
+      };
+      if (t.kind === "gap") give(10, "gaps", "gap passed");
+      else if (t.kind === "obstacle") give(15, "obstacles", "obstacle passed");
+      else if (t.kind === "t" || t.kind === "cross") give(10, "intersections", "intersection passed");
+      else if (t.kind === "bump") give(5, "bumps", "speed bumps passed");
+      else if (t.kind === "seesaw") give(15, "seesaws", "seesaw passed");
+      else if (t.kind === "rampup" || t.kind === "rampdown") give(10, "ramps", "ramp passed");
+      else if (t.kind === "checkpoint") {
         this.scoredTiles.add(idx);
-        this.score.obstacles++;
-        this.addPoints(15, "obstacle passed");
-      } else if (t.kind === "t" || t.kind === "cross") {
-        this.scoredTiles.add(idx);
-        this.score.intersections++;
-        this.addPoints(10, "intersection passed");
+        this.score.checkpoints++;
+        this.respawn = { x: c * TILE + TILE / 2, y: r * TILE + TILE / 2, heading: this.robot.heading };
+        this.addPoints(10, "checkpoint reached");
       }
     }
 
-    // lack of progress: too long without seeing the line, outside the zone
+    // red line ends the run when the robot is on the red segment
+    if (t.kind === "red") {
+      const front = this.colorSensors();
+      if (front.left === "red" || front.right === "red") {
+        this.finished = "red";
+        this.log("red line: end of run");
+        return;
+      }
+    }
+
     if (t.kind === "zone") {
       this.offLineSince = 0;
       return;
@@ -290,21 +368,17 @@ export class Sim {
       this.offLineSince = 0;
     } else {
       this.offLineSince += dt;
-      if (this.offLineSince > 5) {
-        this.lop();
-      }
+      if (this.offLineSince > 5) this.lop();
     }
   }
 
   lop() {
     this.score.lops++;
     this.offLineSince = 0;
-    this.log("lack of progress, back to start");
+    this.log("lack of progress, back to last checkpoint");
     const held = this.robot.heldBall;
-    if (held) {
-      held.held = false;
-    }
-    this.robot = this.spawn();
+    if (held) held.held = false;
+    this.robot = this.freshRobot(this.respawn.x, this.respawn.y, this.respawn.heading);
   }
 
   private addPoints(p: number, msg: string) {
@@ -318,7 +392,7 @@ export class Sim {
   }
 }
 
-// ---------- user code runner ----------
+// ---------- user code runner (JavaScript) ----------
 
 export interface RobotApi {
   lineSensors(): number[];
@@ -351,7 +425,6 @@ export function makeApi(sim: Sim, logs: string[]): RobotApi {
 
 export function compileRobot(code: string): ((api: RobotApi, state: Record<string, unknown>) => void) | string {
   try {
-    // The user defines loop(robot, state); state persists between ticks.
     const factory = new Function(
       "api",
       "state",
@@ -361,4 +434,18 @@ export function compileRobot(code: string): ((api: RobotApi, state: Record<strin
   } catch (e) {
     return String(e);
   }
+}
+
+// snapshot of everything the Python side needs for one tick
+export function sensorSnapshot(sim: Sim) {
+  return {
+    line: sim.lineSensors(),
+    color: sim.colorSensors(),
+    dist_front: sim.distance(0),
+    dist_left: sim.distance(-Math.PI / 3),
+    dist_right: sim.distance(Math.PI / 3),
+    camera: sim.zoneCamera(),
+    in_zone: sim.inZone(),
+    time: sim.time,
+  };
 }

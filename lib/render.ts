@@ -8,16 +8,18 @@ export const COLORS = {
   line: "#111111",
   green: "#00a651",
   silver: "#c9ccd4",
+  red: "#e10600",
   wall: "#8b5e3c",
   zoneFloor: "#f4f4f6",
   evac: "#2b2f36",
+  rampShade: "#ececef",
 };
 
 export const LINE_W = 22;
 
-function drawLine(ctx: CanvasRenderingContext2D, pts: [number, number][]) {
-  ctx.strokeStyle = COLORS.line;
-  ctx.lineWidth = LINE_W;
+function line(ctx: CanvasRenderingContext2D, pts: [number, number][], color = COLORS.line, w = LINE_W) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = w;
   ctx.lineCap = "butt";
   ctx.beginPath();
   ctx.moveTo(pts[0][0], pts[0][1]);
@@ -25,14 +27,23 @@ function drawLine(ctx: CanvasRenderingContext2D, pts: [number, number][]) {
   ctx.stroke();
 }
 
+function markers(ctx: CanvasRenderingContext2D, t: Tile, mid: number) {
+  if (t.marker === "left" || t.marker === "both") {
+    ctx.fillStyle = COLORS.green;
+    ctx.fillRect(mid - LINE_W / 2 - 34, mid + LINE_W / 2 + 4, 30, 30);
+  }
+  if (t.marker === "right" || t.marker === "both") {
+    ctx.fillStyle = COLORS.green;
+    ctx.fillRect(mid + LINE_W / 2 + 4, mid + LINE_W / 2 + 4, 30, 30);
+  }
+}
+
 function drawTile(ctx: CanvasRenderingContext2D, t: Tile, course: Course, col: number, row: number) {
   const x = col * TILE;
   const y = row * TILE;
-  const cx = x + TILE / 2;
-  const cy = y + TILE / 2;
 
   ctx.save();
-  ctx.translate(cx, cy);
+  ctx.translate(x + TILE / 2, y + TILE / 2);
   ctx.rotate((t.rot * Math.PI) / 2);
   ctx.translate(-TILE / 2, -TILE / 2);
 
@@ -40,88 +51,105 @@ function drawTile(ctx: CanvasRenderingContext2D, t: Tile, course: Course, col: n
 
   switch (t.kind) {
     case "straight":
+      line(ctx, [[0, mid], [TILE, mid]]);
+      break;
     case "start":
-      drawLine(ctx, [
-        [0, mid],
-        [TILE, mid],
-      ]);
-      if (t.kind === "start") {
-        ctx.fillStyle = COLORS.silver;
-        ctx.fillRect(TILE * 0.1, mid - LINE_W * 2.2, TILE * 0.16, LINE_W * 4.4);
+      line(ctx, [[0, mid], [TILE, mid]]);
+      ctx.fillStyle = "#b9f0c8";
+      ctx.fillRect(TILE * 0.08, mid - LINE_W * 2.2, TILE * 0.14, LINE_W * 4.4);
+      break;
+    case "checkpoint":
+      line(ctx, [[0, mid], [TILE, mid]]);
+      // checkerboard strip under the line marks the checkpoint
+      for (let i = 0; i < 6; i++) {
+        ctx.fillStyle = i % 2 ? "#666" : "#bbb";
+        ctx.fillRect(mid - 12 + (i % 3) * 8, mid + LINE_W + 8 + Math.floor(i / 3) * 8, 8, 8);
       }
       break;
-    case "gap": {
-      drawLine(ctx, [
-        [0, mid],
-        [TILE * 0.3, mid],
-      ]);
-      drawLine(ctx, [
-        [TILE * 0.7, mid],
-        [TILE, mid],
-      ]);
+    case "silver":
+      line(ctx, [[0, mid], [TILE, mid]]);
+      ctx.fillStyle = COLORS.silver;
+      ctx.fillRect(TILE * 0.62, mid - LINE_W * 2.4, TILE * 0.14, LINE_W * 4.8);
       break;
-    }
-    case "obstacle": {
-      drawLine(ctx, [
-        [0, mid],
-        [TILE, mid],
-      ]);
+    case "red":
+      line(ctx, [[0, mid], [TILE * 0.55, mid]]);
+      ctx.fillStyle = COLORS.red;
+      ctx.fillRect(TILE * 0.55, mid - LINE_W / 2, LINE_W * 1.6, LINE_W);
+      break;
+    case "gap":
+      line(ctx, [[0, mid], [TILE * 0.3, mid]]);
+      line(ctx, [[TILE * 0.7, mid], [TILE, mid]]);
+      break;
+    case "obstacle":
+      line(ctx, [[0, mid], [TILE, mid]]);
       ctx.fillStyle = COLORS.wall;
       ctx.fillRect(mid - 28, mid - 28, 56, 56);
       break;
+    case "bump":
+      line(ctx, [[0, mid], [TILE, mid]]);
+      ctx.fillStyle = "#d8d4cc";
+      for (const bx of [0.3, 0.55, 0.8]) {
+        ctx.fillRect(TILE * bx - 5, mid - LINE_W * 1.8, 10, LINE_W * 3.6);
+      }
+      break;
+    case "seesaw": {
+      // plank drawn as shaded board, line continues over it
+      ctx.fillStyle = "#efe7d8";
+      ctx.fillRect(TILE * 0.15, mid - 55, TILE * 0.7, 110);
+      ctx.strokeStyle = "#cbbfa5";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(TILE * 0.15, mid - 55, TILE * 0.7, 110);
+      line(ctx, [[0, mid], [TILE, mid]]);
+      break;
     }
-    case "curve": {
+    case "rampup":
+    case "rampdown": {
+      // shaded gradient suggests slope; chevrons point uphill
+      const g = ctx.createLinearGradient(0, 0, TILE, 0);
+      if (t.kind === "rampup") {
+        g.addColorStop(0, "#ffffff");
+        g.addColorStop(1, COLORS.rampShade);
+      } else {
+        g.addColorStop(0, COLORS.rampShade);
+        g.addColorStop(1, "#ffffff");
+      }
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, TILE, TILE);
+      line(ctx, [[0, mid], [TILE, mid]]);
+      ctx.strokeStyle = "#b9b4c2";
+      ctx.lineWidth = 5;
+      const dir = t.kind === "rampup" ? 1 : -1;
+      for (const cx of [0.35, 0.6]) {
+        ctx.beginPath();
+        ctx.moveTo(TILE * cx - 12 * dir, mid - 46);
+        ctx.lineTo(TILE * cx + 12 * dir, mid - 60);
+        ctx.moveTo(TILE * cx - 12 * dir, mid + 46);
+        ctx.lineTo(TILE * cx + 12 * dir, mid + 60);
+        ctx.stroke();
+      }
+      break;
+    }
+    case "curve":
       ctx.strokeStyle = COLORS.line;
       ctx.lineWidth = LINE_W;
       ctx.beginPath();
-      // from left edge to bottom edge
       ctx.arc(0, TILE, mid, -Math.PI / 2, 0);
       ctx.stroke();
       break;
-    }
-    case "t": {
-      drawLine(ctx, [
-        [0, mid],
-        [TILE, mid],
-      ]);
-      drawLine(ctx, [
-        [mid, mid],
-        [mid, TILE],
-      ]);
-      if (t.marker === "left" || t.marker === "both") {
-        ctx.fillStyle = COLORS.green;
-        ctx.fillRect(mid - LINE_W / 2 - 34, mid + LINE_W / 2 + 4, 30, 30);
-      }
-      if (t.marker === "right" || t.marker === "both") {
-        ctx.fillStyle = COLORS.green;
-        ctx.fillRect(mid + LINE_W / 2 + 4, mid + LINE_W / 2 + 4, 30, 30);
-      }
+    case "t":
+      line(ctx, [[0, mid], [TILE, mid]]);
+      line(ctx, [[mid, mid], [mid, TILE]]);
+      markers(ctx, t, mid);
       break;
-    }
-    case "cross": {
-      drawLine(ctx, [
-        [0, mid],
-        [TILE, mid],
-      ]);
-      drawLine(ctx, [
-        [mid, 0],
-        [mid, TILE],
-      ]);
-      if (t.marker === "left" || t.marker === "both") {
-        ctx.fillStyle = COLORS.green;
-        ctx.fillRect(mid - LINE_W / 2 - 34, mid + LINE_W / 2 + 4, 30, 30);
-      }
-      if (t.marker === "right" || t.marker === "both") {
-        ctx.fillStyle = COLORS.green;
-        ctx.fillRect(mid + LINE_W / 2 + 4, mid + LINE_W / 2 + 4, 30, 30);
-      }
+    case "cross":
+      line(ctx, [[0, mid], [TILE, mid]]);
+      line(ctx, [[mid, 0], [mid, TILE]]);
+      markers(ctx, t, mid);
       break;
-    }
-    case "zone": {
+    case "zone":
       ctx.fillStyle = COLORS.zoneFloor;
       ctx.fillRect(0, 0, TILE, TILE);
       break;
-    }
     default:
       break;
   }
@@ -135,7 +163,6 @@ function drawTile(ctx: CanvasRenderingContext2D, t: Tile, course: Course, col: n
     if (tileAt(course, col, row + 1).kind !== "zone") ctx.fillRect(x, y + TILE - W, TILE, W);
     if (tileAt(course, col - 1, row).kind !== "zone") ctx.fillRect(x, y, W, TILE);
     if (tileAt(course, col + 1, row).kind !== "zone") ctx.fillRect(x + TILE - W, y, W, TILE);
-    // evacuation corner on rot=2 tile
     if (t.rot === 2) {
       ctx.fillStyle = COLORS.evac;
       ctx.beginPath();
@@ -151,6 +178,21 @@ function drawTile(ctx: CanvasRenderingContext2D, t: Tile, course: Course, col: n
 export function renderCourse(ctx: CanvasRenderingContext2D, course: Course) {
   ctx.fillStyle = COLORS.floor;
   ctx.fillRect(0, 0, course.cols * TILE, course.rows * TILE);
+  // faint grid to help editing
+  ctx.strokeStyle = "#00000010";
+  ctx.lineWidth = 1;
+  for (let c = 1; c < course.cols; c++) {
+    ctx.beginPath();
+    ctx.moveTo(c * TILE, 0);
+    ctx.lineTo(c * TILE, course.rows * TILE);
+    ctx.stroke();
+  }
+  for (let r = 1; r < course.rows; r++) {
+    ctx.beginPath();
+    ctx.moveTo(0, r * TILE);
+    ctx.lineTo(course.cols * TILE, r * TILE);
+    ctx.stroke();
+  }
   for (let r = 0; r < course.rows; r++) {
     for (let c = 0; c < course.cols; c++) {
       drawTile(ctx, tileAt(course, c, r), course, c, r);
@@ -159,8 +201,13 @@ export function renderCourse(ctx: CanvasRenderingContext2D, course: Course) {
 }
 
 // classify a sampled pixel
-export function classify(r: number, g: number, b: number): "white" | "black" | "green" | "silver" | "wall" {
+export function classify(
+  r: number,
+  g: number,
+  b: number,
+): "white" | "black" | "green" | "silver" | "red" | "wall" {
   if (g > 120 && r < 100 && b < 120) return "green";
+  if (r > 180 && g < 80 && b < 80) return "red";
   const lum = (r + g + b) / 3;
   if (lum < 70) return "black";
   if (r > 120 && g > 80 && g < 120 && b < 80) return "wall";

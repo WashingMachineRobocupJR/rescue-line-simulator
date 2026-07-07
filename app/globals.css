@@ -120,6 +120,49 @@ a { color: var(--brand); text-decoration: none; }
 .sim-api { flex: 1; overflow: auto; padding: 14px; }
 .sim-api pre { font-size: 12px; line-height: 1.6; color: var(--mute); white-space: pre-wrap; }
 
+.sim-tools, .sim-brushes { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.sim-brushes { margin-top: 6px; }
+.sim-tools .sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; }
+.sim-palette { flex-direction: column; align-items: flex-start; }
+
+.sim-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--mute); cursor: pointer; }
+
+.sim-tabs { display: flex; gap: 6px; align-items: center; }
+.sim-tabs button { padding: 4px 10px; font-size: 12px; }
+.sim-file {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--mute);
+  border: 1px dashed var(--line); border-radius: 6px; padding: 3px 6px;
+}
+.sim-file button { border: none; background: none; padding: 0 2px; font-size: 12px; color: var(--mute); }
+.upload {
+  font-size: 12px; color: var(--ink); cursor: pointer;
+  border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px;
+}
+.upload:hover { border-color: var(--brand); }
+
+.sim-status {
+  padding: 8px 12px;
+  background: #1a2338;
+  color: #9cc3ff;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  border-top: 1px solid #24365c;
+}
+
+.sim-finish {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(14, 14, 20, 0.92);
+  border: 1px solid var(--brand);
+  border-radius: 14px;
+  padding: 22px 34px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
 .sim-error {
   padding: 8px 12px;
   background: #3a1520;
