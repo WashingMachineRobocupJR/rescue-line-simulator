@@ -25,6 +25,8 @@ import {
 } from "@/lib/sim";
 import { DEMO_ROBOT } from "@/lib/demoRobot";
 import { PyRunner, DEMO_PYTHON, PyFile } from "@/lib/pyRunner";
+import { PRESETS } from "@/lib/presets";
+import { ROBOT_PRESETS } from "@/lib/robots";
 
 const Monaco = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
@@ -340,6 +342,44 @@ export function Simulator() {
           </span>
         </div>
         <div className="sim-controls">
+          <select
+            className="sim-select"
+            value=""
+            onChange={(e) => {
+              const p = PRESETS.find((x) => x.name === e.target.value);
+              if (p) {
+                stop();
+                setCourse(p.course());
+                window.history.replaceState(null, "", "#");
+              }
+            }}
+          >
+            <option value="" disabled>
+              Load map…
+            </option>
+            {PRESETS.map((p) => (
+              <option key={p.name} value={p.name} title={p.description}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <select
+            className="sim-select"
+            value=""
+            onChange={(e) => {
+              const r = ROBOT_PRESETS.find((x) => x.lang === lang && x.name === e.target.value);
+              if (r) (lang === "js" ? setJsCode : setPyCode)(r.code);
+            }}
+          >
+            <option value="" disabled>
+              Load robot…
+            </option>
+            {ROBOT_PRESETS.filter((r) => r.lang === lang).map((r) => (
+              <option key={r.name} value={r.name}>
+                {r.name}
+              </option>
+            ))}
+          </select>
           <button className={mode === "edit" ? "on" : ""} onClick={() => { reset(); setMode(mode === "edit" ? "run" : "edit"); }}>
             {mode === "edit" ? "Done editing" : "Edit course"}
           </button>

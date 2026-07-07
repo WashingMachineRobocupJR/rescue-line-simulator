@@ -125,19 +125,20 @@ export function demoCourse(): Course {
   const set = (col: number, row: number, t: Partial<Tile> & { kind: TileKind }) => {
     c.tiles[row * c.cols + col] = { ...EMPTY_TILE, ...t };
   };
+  // curve connections: rot0 = W+S, rot1 = N+W, rot2 = E+N, rot3 = S+E
   set(0, 3, { kind: "start", rot: 0 });
   set(1, 3, { kind: "bump", rot: 0 });
   set(2, 3, { kind: "gap", rot: 0 });
   set(3, 3, { kind: "checkpoint", rot: 0 });
   set(4, 3, { kind: "straight", rot: 0 });
-  set(5, 3, { kind: "curve", rot: 3 });
+  set(5, 3, { kind: "curve", rot: 1 });
   set(5, 2, { kind: "obstacle", rot: 1 });
-  set(5, 1, { kind: "curve", rot: 2 });
-  set(4, 1, { kind: "t", rot: 0, marker: "left" });
+  set(5, 1, { kind: "curve", rot: 0 });
+  set(4, 1, { kind: "t", rot: 0, marker: "none" });
   set(4, 2, { kind: "seesaw", rot: 1 });
   set(3, 1, { kind: "rampup", rot: 2 });
-  set(2, 1, { kind: "curve", rot: 1 });
-  set(2, 0, { kind: "curve", rot: 0 });
+  set(2, 1, { kind: "curve", rot: 2 });
+  set(2, 0, { kind: "curve", rot: 3 });
   set(3, 0, { kind: "straight", rot: 0 });
   set(4, 0, { kind: "silver", rot: 0 });
   // zone: 2x2 arena top-right

@@ -155,14 +155,39 @@ function drawTile(ctx: CanvasRenderingContext2D, t: Tile, course: Course, col: n
   }
   ctx.restore();
 
-  // zone walls + evacuation corner drawn unrotated
+  // zone walls + evacuation corner drawn unrotated.
+  // Edges facing a line tile get a doorway (the zone entrance).
   if (t.kind === "zone") {
     ctx.fillStyle = COLORS.wall;
     const W = 10;
-    if (tileAt(course, col, row - 1).kind !== "zone") ctx.fillRect(x, y, TILE, W);
-    if (tileAt(course, col, row + 1).kind !== "zone") ctx.fillRect(x, y + TILE - W, TILE, W);
-    if (tileAt(course, col - 1, row).kind !== "zone") ctx.fillRect(x, y, W, TILE);
-    if (tileAt(course, col + 1, row).kind !== "zone") ctx.fillRect(x + TILE - W, y, W, TILE);
+    const DOOR = 90;
+    const wallH = (wx: number, wy: number, hasDoor: boolean) => {
+      if (hasDoor) {
+        const side = (TILE - DOOR) / 2;
+        ctx.fillRect(wx, wy, side, W);
+        ctx.fillRect(wx + TILE - side, wy, side, W);
+      } else {
+        ctx.fillRect(wx, wy, TILE, W);
+      }
+    };
+    const wallV = (wx: number, wy: number, hasDoor: boolean) => {
+      if (hasDoor) {
+        const side = (TILE - DOOR) / 2;
+        ctx.fillRect(wx, wy, W, side);
+        ctx.fillRect(wx, wy + TILE - side, W, side);
+      } else {
+        ctx.fillRect(wx, wy, W, TILE);
+      }
+    };
+    const isLine = (k: string) => k !== "zone" && k !== "empty";
+    const n = tileAt(course, col, row - 1).kind;
+    const s = tileAt(course, col, row + 1).kind;
+    const w = tileAt(course, col - 1, row).kind;
+    const e = tileAt(course, col + 1, row).kind;
+    if (n !== "zone") wallH(x, y, isLine(n));
+    if (s !== "zone") wallH(x, y + TILE - W, isLine(s));
+    if (w !== "zone") wallV(x, y, isLine(w));
+    if (e !== "zone") wallV(x + TILE - W, y, isLine(e));
     if (t.rot === 2) {
       ctx.fillStyle = COLORS.evac;
       ctx.beginPath();
