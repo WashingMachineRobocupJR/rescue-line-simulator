@@ -1,36 +1,53 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Rescue Line Simulator
 
-## Getting Started
+A free browser simulator for RoboCup Junior Rescue Line. Build courses, program a virtual robot in JavaScript, score your runs. No field, no robot, no budget required.
 
-First, run the development server:
+**Try it: [sim.washingmachine.click](https://sim.washingmachine.click)**
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+Built by [WashingMachine](https://washingmachine.click), a RoboCup Junior Rescue Line team from ITIS A. Rossi, Vicenza.
+
+## Why
+
+A Rescue Line practice field costs hundreds of euros. A competitive robot costs thousands. That is the entry barrier that keeps most schools out of robotics competitions. A browser tab costs nothing.
+
+The simulator will never replace a real robot: motors stall, sensors drift, batteries sag, and none of that happens here. But the *hard thinking* of Rescue Line (control loops, state machines, evacuation strategy) transfers one-to-one. A team can arrive at its first real field with working logic instead of a blank file.
+
+## What's inside
+
+- **Course editor**: straights, curves, T and cross junctions with green markers, gaps, obstacles, and an evacuation zone with silver/black victims. Click to place, click again to rotate. Courses serialize into the URL: share a link, share the course.
+- **A programmable robot**: differential drive, 8-sensor reflectance bar, two color sensors, a distance sensor, a gripper, and a zone camera that returns ball detections (kind, angle, distance), modeled after how camera-based robots actually perceive the zone.
+- **Honest sensing**: sensors sample the same bitmap you see on screen. What the robot sees is literally what you see.
+- **Scoring + LoP**: gaps, obstacles, intersections, victims, with automatic lack-of-progress when the robot loses the line, exactly like losing a run at a real tournament.
+- **In-browser editor** (Monaco) with a persistent `state` object and an on-screen log. The default program is a complete example: PID line following, green-marker turns, obstacle avoidance, and a basic evacuation strategy. Read it, break it, beat it.
+
+## Robot API
+
+```js
+function loop(robot, state) {
+  const s = robot.lineSensors();   // 8 values, 1 = black
+  robot.colorSensors();            // { left, right }
+  robot.distance(0);               // px to nearest wall/obstacle
+  robot.zoneCamera();              // [{ kind, angle, distance }]
+  robot.inZone();                  // true inside the evacuation zone
+  robot.setMotors(0.5, 0.5);       // each in [-1, 1]
+  robot.gripper(true);             // grab / release balls
+  robot.log("hi");                 // on-screen log
+}
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Full docs in the app (the "API" button above the editor).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Run locally
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+pnpm install
+pnpm dev
+```
 
-## Learn More
+## Contributing
 
-To learn more about Next.js, take a look at the following resources:
+Issues and pull requests welcome. Good first ideas: seesaw and ramp tiles, speed bumps, sensor noise option, checkpoint tiles, a course library.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## License
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+MIT
