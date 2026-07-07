@@ -62,6 +62,8 @@ class Robot:
         return self._s["dist_" + side]
     def zone_camera(self):
         return self._s["camera"]
+    def corner(self):
+        return self._s["corner"]
     def in_zone(self):
         return self._s["in_zone"]
     def time(self):

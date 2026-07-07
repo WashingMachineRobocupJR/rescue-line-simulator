@@ -9,7 +9,7 @@ import { classify } from "./render";
 export const ROBOT_R = 34; // robot radius (px)
 export const MAX_SPEED = 260; // px/s at motor=1
 const TURN_FACTOR = 3.4; // rad/s at full differential
-const MOTOR_TAU = 0.12; // s, motor response time constant
+const MOTOR_TAU = 0.08; // s, motor response time constant
 const PICKUP_DIST = ROBOT_R + 16;
 const CAMERA_FOV = Math.PI * 0.5;
 const CAMERA_RANGE = TILE * 2.2;
@@ -78,6 +78,8 @@ export class Sim {
   offLineSince = 0;
   finished: false | "time" | "red" = false;
   opts: SimOptions;
+  zoneEntered = false; // once inside, the entrance closes behind the robot
+  private doors: Array<{ x: number; y: number; w: number; h: number }> = [];
   private scoredTiles = new Set<number>();
   private respawn: { x: number; y: number; heading: number };
   private seesawWobble = 0;
@@ -92,6 +94,19 @@ export class Sim {
     this.balls = course.balls.map((b) => ({ ...b }));
     this.robot = this.spawn();
     this.respawn = { x: this.robot.x, y: this.robot.y, heading: this.robot.heading };
+    // doorway bands between zone tiles and line tiles
+    const isLine = (k: string) => k !== "zone" && k !== "empty";
+    for (let r = 0; r < course.rows; r++) {
+      for (let c = 0; c < course.cols; c++) {
+        if (tileAt(course, c, r).kind !== "zone") continue;
+        const x = c * TILE;
+        const y = r * TILE;
+        if (isLine(tileAt(course, c, r - 1).kind)) this.doors.push({ x, y: y - 14, w: TILE, h: 28 });
+        if (isLine(tileAt(course, c, r + 1).kind)) this.doors.push({ x, y: y + TILE - 14, w: TILE, h: 28 });
+        if (isLine(tileAt(course, c - 1, r).kind)) this.doors.push({ x: x - 14, y, w: 28, h: TILE });
+        if (isLine(tileAt(course, c + 1, r).kind)) this.doors.push({ x: x + TILE - 14, y, w: 28, h: TILE });
+      }
+    }
   }
 
   private spawn(): RobotState {
@@ -110,7 +125,7 @@ export class Sim {
     return { x, y, heading, ml: 0, mr: 0, vl: 0, vr: 0, gripperClosed: false, heldBall: null };
   }
 
-  // ---------- pixel sampling ----------
+  // pixel sampling
 
   sample(x: number, y: number): ReturnType<typeof classify> {
     const w = this.course.cols * TILE;
@@ -118,15 +133,20 @@ export class Sim {
     const xi = Math.round(x);
     const yi = Math.round(y);
     if (xi < 0 || yi < 0 || xi >= w || yi >= h) return "wall";
+    if (this.zoneEntered) {
+      for (const d of this.doors) {
+        if (xi >= d.x && xi < d.x + d.w && yi >= d.y && yi < d.y + d.h) return "wall";
+      }
+    }
     const i = (yi * w + xi) * 4;
     return classify(this.img.data[i], this.img.data[i + 1], this.img.data[i + 2]);
   }
 
-  // ---------- sensors ----------
+  // sensors
 
   lineSensors(n = 8): number[] {
     const out: number[] = [];
-    const span = ROBOT_R * 1.7;
+    const span = ROBOT_R * 2.2;
     const ahead = ROBOT_R * 0.75;
     const { x, y, heading } = this.robot;
     for (let i = 0; i < n; i++) {
@@ -150,7 +170,8 @@ export class Sim {
       const sy = y + Math.sin(heading) * ahead + Math.cos(heading) * off * side;
       return this.sample(sx, sy);
     };
-    return { left: pick(1), right: pick(-1) };
+    // canvas y points down: negative lateral offset is the robot's left
+    return { left: pick(-1), right: pick(1) };
   }
 
   distance(angleOffset = 0): number {
@@ -179,6 +200,16 @@ export class Sim {
       while (ang > Math.PI) ang -= 2 * Math.PI;
       while (ang < -Math.PI) ang += 2 * Math.PI;
       if (Math.abs(ang) > CAMERA_FOV / 2) continue;
+      // walls occlude the camera
+      let blocked = false;
+      const steps = Math.floor(dist / 6);
+      for (let i = 1; i < steps; i++) {
+        if (this.sample(x + (dx * i) / steps, y + (dy * i) / steps) === "wall") {
+          blocked = true;
+          break;
+        }
+      }
+      if (blocked) continue;
       out.push({
         kind: b.kind,
         angle: this.opts.noise ? ang + gauss(0.015) : ang,
@@ -192,6 +223,32 @@ export class Sim {
     return this.tileUnder()?.kind === "zone";
   }
 
+  // camera detection of the dark evacuation corner (same FOV/occlusion as balls)
+  corner(): Detection | null {
+    for (let r = 0; r < this.course.rows; r++) {
+      for (let c = 0; c < this.course.cols; c++) {
+        const t = tileAt(this.course, c, r);
+        if (t.kind !== "zone" || t.rot !== 2) continue;
+        const cx = (c + 1) * TILE - 45;
+        const cy = (r + 1) * TILE - 45;
+        const dx = cx - this.robot.x;
+        const dy = cy - this.robot.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > CAMERA_RANGE * 1.4) return null;
+        let ang = Math.atan2(dy, dx) - this.robot.heading;
+        while (ang > Math.PI) ang -= 2 * Math.PI;
+        while (ang < -Math.PI) ang += 2 * Math.PI;
+        if (Math.abs(ang) > CAMERA_FOV / 2) return null;
+        const steps = Math.floor(dist / 6);
+        for (let i = 1; i < steps - 4; i++) {
+          if (this.sample(this.robot.x + (dx * i) / steps, this.robot.y + (dy * i) / steps) === "wall") return null;
+        }
+        return { kind: "silver", angle: ang, distance: dist };
+      }
+    }
+    return null;
+  }
+
   tileUnder(): Tile | null {
     const c = Math.floor(this.robot.x / TILE);
     const r = Math.floor(this.robot.y / TILE);
@@ -199,7 +256,7 @@ export class Sim {
     return tileAt(this.course, c, r);
   }
 
-  // ---------- actuation + physics ----------
+  // actuation + physics
 
   setMotors(l: number, r: number) {
     this.robot.ml = Math.max(-1, Math.min(1, l));
@@ -302,7 +359,8 @@ export class Sim {
     }
 
     const v = ((rb.vl + rb.vr) / 2) * MAX_SPEED * speedFactor;
-    const w = ((rb.vr - rb.vl) / 2) * TURN_FACTOR;
+    // canvas y points down: faster LEFT wheel turns the robot toward +heading
+    const w = ((rb.vl - rb.vr) / 2) * TURN_FACTOR;
     rb.heading += w * dt;
     const nx = rb.x + Math.cos(rb.heading) * v * dt;
     const ny = rb.y + Math.sin(rb.heading) * v * dt;
@@ -344,7 +402,8 @@ export class Sim {
       else if (t.kind === "checkpoint") {
         this.scoredTiles.add(idx);
         this.score.checkpoints++;
-        this.respawn = { x: c * TILE + TILE / 2, y: r * TILE + TILE / 2, heading: this.robot.heading };
+        const snapped = (Math.round(this.robot.heading / (Math.PI / 2)) * Math.PI) / 2;
+        this.respawn = { x: c * TILE + TILE / 2, y: r * TILE + TILE / 2, heading: snapped };
         this.addPoints(10, "checkpoint reached");
       }
     }
@@ -361,6 +420,16 @@ export class Sim {
 
     if (t.kind === "zone") {
       this.offLineSince = 0;
+      if (!this.zoneEntered) {
+        // fully inside (center clear of the doorway band): entrance closes
+        const inDoor = this.doors.some(
+          (d) => this.robot.x >= d.x - 40 && this.robot.x < d.x + d.w + 40 && this.robot.y >= d.y - 40 && this.robot.y < d.y + d.h + 40,
+        );
+        if (!inDoor) {
+          this.zoneEntered = true;
+          this.log("evacuation zone: entrance closed");
+        }
+      }
       return;
     }
     const seesLine = this.lineSensors().some((v) => v > 0.5);
@@ -392,13 +461,14 @@ export class Sim {
   }
 }
 
-// ---------- user code runner (JavaScript) ----------
+// user code runner (JavaScript)
 
 export interface RobotApi {
   lineSensors(): number[];
   colorSensors(): { left: string; right: string };
   distance(angleOffset?: number): number;
   zoneCamera(): Detection[];
+  corner(): Detection | null;
   inZone(): boolean;
   setMotors(l: number, r: number): void;
   gripper(closed: boolean): void;
@@ -412,6 +482,7 @@ export function makeApi(sim: Sim, logs: string[]): RobotApi {
     colorSensors: () => sim.colorSensors(),
     distance: (a?: number) => sim.distance(a),
     zoneCamera: () => sim.zoneCamera(),
+    corner: () => sim.corner(),
     inZone: () => sim.inZone(),
     setMotors: (l, r) => sim.setMotors(l, r),
     gripper: (c) => sim.setGripper(c),
@@ -445,6 +516,7 @@ export function sensorSnapshot(sim: Sim) {
     dist_left: sim.distance(-Math.PI / 3),
     dist_right: sim.distance(Math.PI / 3),
     camera: sim.zoneCamera(),
+    corner: sim.corner(),
     in_zone: sim.inZone(),
     time: sim.time,
   };

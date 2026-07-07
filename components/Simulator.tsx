@@ -511,6 +511,8 @@ robot.colorSensors()     { left, right } -> "white"|"black"|"green"|
                          "silver"|"red"|"wall"
 robot.distance(offset?)  px to nearest wall/obstacle (offset in rad)
 robot.zoneCamera()       [{ kind, angle, distance }] in a 90-deg cone
+robot.corner()           evacuation corner detection { angle,
+                         distance } or null (walls occlude it)
 robot.inZone()           true in the evacuation zone
 robot.setMotors(l, r)    each in [-1, 1] (motors have inertia!)
 robot.gripper(closed)    grab / release balls
@@ -536,6 +538,8 @@ robot.line_sensors()       8 values: 0 white, 1 black, ~0.55 green
 robot.color_sensors()      {"left": ..., "right": ...}
 robot.distance(side)       "front" | "left" | "right" -> px
 robot.zone_camera()        [{"kind", "angle", "distance"}]
+robot.corner()             evacuation corner {"angle", "distance"}
+                           or None (walls occlude it)
 robot.in_zone()            True in the evacuation zone
 robot.set_motors(l, r)     each in [-1, 1] (motors have inertia!)
 robot.gripper(closed)      grab / release balls

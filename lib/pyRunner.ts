@@ -74,23 +74,49 @@ export const DEMO_PYTHON = `# Rescue Line robot in Python. Runs sandboxed in YOU
 # Define loop(robot, state). Allowed imports: math, random, json, ...
 # Network, filesystem and JS access are blocked.
 
-KP, KD = 1.6, 8.0
+KP, KD = 2.2, 9.0
 BASE = 0.55
 
 def loop(robot, state):
+    t = robot.time()
+
     # evacuation zone
     if robot.in_zone():
         balls = robot.zone_camera()
-        if state.get("holding"):
-            if robot.distance("front") < 30:
-                robot.gripper(False)
-                state["holding"] = False
-                robot.set_motors(-0.5, -0.5)
-            elif robot.distance("right") > 60:
-                robot.set_motors(0.6, 0.35)
+
+        if state.get("escape"):
+            if t - state["escape"] > 0.7:
+                state["escape"] = None
             else:
-                robot.set_motors(0.5, 0.5)
+                robot.set_motors(-0.5, -0.3)
+                return
+        if not state.get("holding") and robot.distance("front") < 12:
+            state["escape"] = t
             return
+
+        if state.get("holding"):
+            # find the dark evacuation corner with the camera and deliver
+            c = robot.corner()
+            if c:
+                if c["distance"] < 62:
+                    robot.gripper(False)
+                    state["holding"] = False
+                    state["dropped"] = t
+                    robot.set_motors(-0.5, -0.5)
+                    return
+                robot.set_motors(0.45 + c["angle"] * 0.9, 0.45 - c["angle"] * 0.9)
+                return
+            if robot.distance("front") < 30:
+                robot.set_motors(-0.5, -0.35)
+                return
+            robot.set_motors(0.3, -0.3)  # spin until the corner comes into view
+            return
+
+        # just dropped one: back away so we do not grab it again
+        if state.get("dropped") and t - state["dropped"] < 1.4:
+            robot.set_motors(-0.45, -0.55)
+            return
+
         if balls:
             b = balls[0]
             if b["distance"] < 55:
@@ -99,42 +125,67 @@ def loop(robot, state):
                 return
             robot.set_motors(0.5 + b["angle"], 0.5 - b["angle"])
             return
-        robot.set_motors(0.35, -0.35)
+
+        robot.set_motors(0.35, -0.35)  # scan
         return
 
-    # green markers
+    # green markers (cooldown avoids re-triggering on the same marker)
     color = robot.color_sensors()
-    if color["left"] == "green" and color["right"] != "green":
-        robot.set_motors(-0.25, 0.75)
-        return
-    if color["right"] == "green" and color["left"] != "green":
-        robot.set_motors(0.75, -0.25)
-        return
-
-    # obstacle
-    if robot.distance("front") < 25 and not state.get("avoiding"):
-        state["avoiding"] = robot.time()
-    if state.get("avoiding"):
-        dt = robot.time() - state["avoiding"]
-        if dt < 0.5:
-            robot.set_motors(-0.6, 0.6)
-        elif dt < 1.6:
-            robot.set_motors(0.75, 0.45)
-        elif any(v > 0.5 for v in robot.line_sensors()):
-            state["avoiding"] = None
-        else:
-            robot.set_motors(0.75, 0.45)
+    green_ok = not state.get("green_cd") or t - state["green_cd"] > 1.6
+    if green_ok and color["left"] == "green" and color["right"] != "green":
+        state["green_cd"] = t
+        state["green_dir"] = -1
+    if green_ok and color["right"] == "green" and color["left"] != "green":
+        state["green_cd"] = t
+        state["green_dir"] = 1
+    if state.get("green_cd") and t - state["green_cd"] < 1.0:
+        d = state["green_dir"]
+        robot.set_motors(-0.3 if d < 0 else 0.78, 0.78 if d < 0 else -0.3)
         return
 
-    # PID line following
     s = robot.line_sensors()
     total = sum(s)
-    if total < 0.3:
-        robot.set_motors(BASE, BASE)  # gap: push through
+    on_line = total >= 0.3
+
+    # obstacle: only trust the distance sensor while we still see the line
+    if on_line and robot.distance("front") < 26 and not state.get("avoiding"):
+        state["avoiding"] = t
+    if state.get("avoiding"):
+        dt = t - state["avoiding"]
+        if dt > 3.4:
+            state["avoiding"] = None
+        elif dt < 0.45:
+            robot.set_motors(-0.6, 0.6)   # rotate off the line
+            return
+        elif dt > 0.9 and on_line:
+            state["avoiding"] = None      # rejoined
+        else:
+            robot.set_motors(0.82, 0.2)   # tight arc around
+            return
+
+    if not on_line:
+        # line lost: strong last error means a curve, arc back toward it
+        last = state.get("last_error", 0)
+        state.setdefault("lost_at", t)
+        lost = t - state["lost_at"]
+        if abs(last) > 1.0:
+            d = 1 if last > 0 else -1
+            if lost < 1.4:
+                robot.set_motors(0.62 if d > 0 else 0.15, 0.15 if d > 0 else 0.62)
+            else:
+                robot.set_motors(0.4 * d, -0.4 * d)
+            return
+        if lost < 0.9:
+            robot.set_motors(BASE, BASE)  # gap: push through
+        else:
+            robot.set_motors(0.35, -0.35)
         return
+    state["lost_at"] = None
+
     error = sum(v * (i - (len(s) - 1) / 2) for i, v in enumerate(s)) / total
     d = error - state.get("last_error", error)
     state["last_error"] = error
     turn = (KP * error + KD * d) * 0.12
-    robot.set_motors(BASE + turn, BASE - turn)
+    base = BASE - min(abs(error) / 3.5, 1) * 0.25
+    robot.set_motors(base + turn, base - turn)
 `;

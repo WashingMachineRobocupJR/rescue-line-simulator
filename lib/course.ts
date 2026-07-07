@@ -70,7 +70,7 @@ export function resizeCourse(c: Course, cols: number, rows: number): Course {
   return next;
 }
 
-// ---------- serialization (URL hash) ----------
+// serialization (URL hash)
 // v1-compatible: new kinds are appended, old hashes still decode.
 
 const KINDS: TileKind[] = [
@@ -118,7 +118,7 @@ export function deserialize(s: string): Course | null {
   }
 }
 
-// ---------- default demo course ----------
+// default demo course
 
 export function demoCourse(): Course {
   const c = makeCourse(7, 4);

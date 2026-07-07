@@ -73,8 +73,9 @@ function drawTile(ctx: CanvasRenderingContext2D, t: Tile, course: Course, col: n
       break;
     case "red":
       line(ctx, [[0, mid], [TILE * 0.55, mid]]);
+      // the red end line spans the full corridor, like on a real field
       ctx.fillStyle = COLORS.red;
-      ctx.fillRect(TILE * 0.55, mid - LINE_W / 2, LINE_W * 1.6, LINE_W);
+      ctx.fillRect(TILE * 0.55, mid - LINE_W * 2.2, LINE_W * 1.6, LINE_W * 4.4);
       break;
     case "gap":
       line(ctx, [[0, mid], [TILE * 0.3, mid]]);
